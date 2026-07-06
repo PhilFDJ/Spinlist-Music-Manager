@@ -14,7 +14,8 @@
   },
   "devDependencies": {
     "electron": "^31.0.0",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "@electron/notarize": "^2.3.2"
   },
   "build": {
     "appId": "co.uk.spinlist.musicmanager",
@@ -43,9 +44,7 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "notarize": {
-        "teamId": "3LVYMTC2X7"
-      }
+      "notarize": false
     },
     "win": {
       "target": [
@@ -66,6 +65,7 @@
         "AppImage"
       ],
       "category": "Audio"
-    }
+    },
+    "afterSign": "notarize.js"
   }
 }
