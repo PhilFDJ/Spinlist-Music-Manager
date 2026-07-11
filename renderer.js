@@ -32,6 +32,7 @@ function enterApp(user) {
   $('main-panel').classList.remove('hide');
   $('who').textContent = 'Signed in as ' + (user.name || user.email) + ' · ' + (user.planName || '');
   loadSaved();
+  restoreLastFolder();   // bring back the folder they scanned last time
 }
 
 async function doLogin() {
@@ -82,12 +83,32 @@ async function loadSaved() {
 }
 
 /* ---------- folder pick + scan ---------- */
-$('pick-btn').addEventListener('click', async () => {
-  const folder = await window.spinlist.pickFolder();
-  if (!folder) return;
+// Show a folder as the current one and reveal Rescan.
+function setFolder(folder) {
   CURRENT_FOLDER = folder;
   $('folder-path').textContent = folder;
   $('rescan-btn').classList.remove('hide');
+}
+
+// On launch, bring back the folder scanned last time so the DJ can just hit
+// Rescan. They only need "Choose folder…" if they're changing library.
+async function restoreLastFolder() {
+  try {
+    const folder = await window.spinlist.getLastFolder();
+    if (folder) {
+      setFolder(folder);
+      $('pick-btn').textContent = 'Change folder…';
+    }
+  } catch (_) { /* no remembered folder — normal first run */ }
+}
+
+$('pick-btn').addEventListener('click', async () => {
+  const folder = await window.spinlist.pickFolder();
+  if (!folder) return;
+  setFolder(folder);
+  $('pick-btn').textContent = 'Change folder…';
+  // Remember it for next launch.
+  try { await window.spinlist.setLastFolder(folder); } catch (_) {}
   await runScan();
 });
 $('rescan-btn').addEventListener('click', () => { if (CURRENT_FOLDER) runScan(); });

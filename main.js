@@ -329,6 +329,26 @@ function readSessionFromDisk() {
   try { const d = JSON.parse(fs.readFileSync(sessionFile(), 'utf8')); return (d && d.cookie) || ''; } catch (_) { return ''; }
 }
 
+/* ---- Remember the last scanned folder, so DJs don't re-pick it every launch.
+   Stored alongside the session in Electron's per-user userData folder. ---- */
+function prefsFile() { return path.join(app.getPath('userData'), 'prefs.json'); }
+function saveLastFolder(folder) {
+  try { fs.writeFileSync(prefsFile(), JSON.stringify({ lastFolder: folder || '' })); } catch (_) {}
+}
+function readLastFolder() {
+  try {
+    const d = JSON.parse(fs.readFileSync(prefsFile(), 'utf8'));
+    const f = (d && d.lastFolder) || '';
+    // Only offer it if the folder still exists — drives get unplugged, folders move.
+    if (f && fs.existsSync(f)) return f;
+  } catch (_) {}
+  return '';
+}
+// Renderer asks for the remembered folder on launch.
+ipcMain.handle('get-last-folder', async () => readLastFolder());
+// Renderer tells us the folder it just scanned.
+ipcMain.handle('set-last-folder', async (evt, folder) => { saveLastFolder(folder); return true; });
+
 ipcMain.handle('login', async (evt, { email, password, remember }) => {
   try {
     const r = await fetch(BASE_URL + '/api/auth/login', {

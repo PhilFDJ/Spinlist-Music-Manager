@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('spinlist', {
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
+  getLastFolder: () => ipcRenderer.invoke('get-last-folder'),
+  setLastFolder: (folder) => ipcRenderer.invoke('set-last-folder', folder),
   scanFolder: (folder, prev) => ipcRenderer.invoke('scan-folder', { folder, prev }),
   login: (email, password, remember) => ipcRenderer.invoke('login', { email, password, remember }),
   restoreSession: () => ipcRenderer.invoke('restore-session'),
