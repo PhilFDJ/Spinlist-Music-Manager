@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld('spinlist', {
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
   getLastFolder: () => ipcRenderer.invoke('get-last-folder'),
   setLastFolder: (folder) => ipcRenderer.invoke('set-last-folder', folder),
-  scanFolder: (folder, prev) => ipcRenderer.invoke('scan-folder', { folder, prev }),
+  scanFolder: (folder, prev, forceRetag) => ipcRenderer.invoke('scan-folder', { folder, prev, forceRetag: !!forceRetag }),
   login: (email, password, remember) => ipcRenderer.invoke('login', { email, password, remember }),
   restoreSession: () => ipcRenderer.invoke('restore-session'),
   logout: () => ipcRenderer.invoke('logout'),

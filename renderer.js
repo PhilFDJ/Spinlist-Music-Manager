@@ -88,6 +88,7 @@ function setFolder(folder) {
   CURRENT_FOLDER = folder;
   $('folder-path').textContent = folder;
   $('rescan-btn').classList.remove('hide');
+  $('retag-btn').classList.remove('hide');
 }
 
 // On launch, bring back the folder scanned last time so the DJ can just hit
@@ -112,6 +113,14 @@ $('pick-btn').addEventListener('click', async () => {
   await runScan();
 });
 $('rescan-btn').addEventListener('click', () => { if (CURRENT_FOLDER) runScan(); });
+// Force a full re-read of every file's tags. A normal rescan skips unchanged
+// files and reuses their stored tags, so corrected tag handling (watermark
+// filtering, director support) would never reach an existing library.
+$('retag-btn').addEventListener('click', () => {
+  if (!CURRENT_FOLDER) return;
+  if (!confirm('Read the tags again from every file?\n\nSlower than a normal rescan, but picks up corrected artist names and removes VJ watermarks.')) return;
+  runScan(true);
+});
 
 // Isolated speed test — pick a folder, time one file with no parallelism.
 $('speedtest-btn').addEventListener('click', async () => {
@@ -172,14 +181,14 @@ window.spinlist.onScanProgress(({ done, total, reused, read, counting }) => {
     + (eta > 2 && read > 20 ? '  ·  ~' + fmtTime(eta) + ' left' : '');
 });
 
-async function runScan() {
+async function runScan(forceRetag) {
   const saveMsg = $('save-msg');
   saveMsg.className = 'msg muted'; saveMsg.textContent = '';
   $('bar').classList.remove('hide');
   $('timing-btn').classList.remove('hide');   // let the user read timing mid-scan
-  $('pick-btn').disabled = true; $('rescan-btn').disabled = true;
+  $('pick-btn').disabled = true; $('rescan-btn').disabled = true; $('retag-btn').disabled = true;
   scanStart = Date.now();
-  const { lib, total, reused, read } = await window.spinlist.scanFolder(CURRENT_FOLDER, PREV);
+  const { lib, total, reused, read } = await window.spinlist.scanFolder(CURRENT_FOLDER, PREV, forceRetag);
   $('timing-btn').classList.add('hide');
   $('scan-stat').textContent = lib.length.toLocaleString() + ' tracks'
     + (reused ? ' (' + reused.toLocaleString() + ' unchanged, ' + read.toLocaleString() + ' newly read)' : '');
@@ -187,7 +196,7 @@ async function runScan() {
   saveMsg.className = 'msg muted'; saveMsg.textContent = 'Saving to your Spinlist account…';
   const name = CURRENT_FOLDER.split(/[\\/]/).pop() || 'library';
   const r = await window.spinlist.saveLibrary(name, lib);
-  $('pick-btn').disabled = false; $('rescan-btn').disabled = false;
+  $('pick-btn').disabled = false; $('rescan-btn').disabled = false; $('retag-btn').disabled = false;
   $('bar').classList.add('hide');
   if (r.ok) {
     saveMsg.className = 'msg ok';

@@ -72,12 +72,52 @@ function decodeFrame(bytes) {
   } catch (_) { return ''; }
 }
 
+/* ---- VJ-pack watermark filtering ----
+   Some VJ editors stamp their branding into video metadata (commonly Album
+   Artist, Comment or the encoding tool). The real track info is still there —
+   the watermark just masks it. This is READ-SIDE ONLY: files are never modified.
+
+   To handle a new VJ source, add its token here. Matching is case-insensitive
+   and by substring, so 'vjvidz' also catches 'www.vjvidz.com'. Keep tokens
+   distinctive — something like 'czar' alone would catch real artist names. */
+const WATERMARK_TOKENS = [
+  'vjvidz.com', 'vjvidz',
+  'smashvidz',
+  'czares/t', 'czares',
+  // Add new VJ-pack branding here as it turns up.
+];
+function isWatermark(v) {
+  const s = (v == null ? '' : String(v)).toLowerCase().trim();
+  if (!s) return false;
+  return WATERMARK_TOKENS.some(tok => s.includes(tok));
+}
+function cleanTag(v) { return isWatermark(v) ? '' : (v == null ? '' : String(v)); }
+
+/* Parse MP4/M4A metadata atoms: ©nam = title, ©ART = artist, ©dir = director.
+
+   Album artist (aART) is deliberately NOT read — on music videos it commonly
+   holds a label, compilation or album name, which is never what we want to
+   show. And we scan only inside the 'ilst' metadata container: sweeping the
+   whole file can match those 4 characters inside another atom's payload, which
+   is how an album name could end up in the artist field. */
 function parseMp4Tags(buf) {
-  const res = { title: '', artist: '' };
+  const res = { title: '', artist: '', director: '' };
   const u32 = (o) => ((buf[o] << 24) | (buf[o + 1] << 16) | (buf[o + 2] << 8) | buf[o + 3]) >>> 0;
   const A9 = '\u00A9';
-  const wanted = { [A9 + 'nam']: 'title', [A9 + 'ART']: 'artist', 'aART': 'artist' };
+  const wanted = { [A9 + 'nam']: 'title', [A9 + 'ART']: 'artist', [A9 + 'dir']: 'director' };
+
+  // Restrict the scan to the 'ilst' metadata container.
+  let scanStart = 0, scanEnd = buf.length;
   for (let i = 0; i + 8 < buf.length; i++) {
+    if (buf[i] === 0x69 && buf[i + 1] === 0x6c && buf[i + 2] === 0x73 && buf[i + 3] === 0x74) {   // "ilst"
+      const size = (i >= 4) ? u32(i - 4) : 0;
+      scanStart = i + 4;
+      if (size > 8 && (i - 4) + size <= buf.length) scanEnd = (i - 4) + size;
+      break;
+    }
+  }
+
+  for (let i = scanStart; i + 8 < scanEnd; i++) {
     const name = String.fromCharCode(buf[i], buf[i + 1], buf[i + 2], buf[i + 3]);
     const which = wanted[name];
     if (!which) continue;
@@ -98,6 +138,10 @@ function parseMp4Tags(buf) {
       j++;
     }
   }
+  // Strip VJ watermarks so they never reach the library.
+  res.title = cleanTag(res.title);
+  res.artist = cleanTag(res.artist);
+  res.director = cleanTag(res.director);
   return res;
 }
 
@@ -136,7 +180,7 @@ async function findMoov(fd, fileSize) {
 }
 
 async function readTags(filePath) {
-  const out = { title: '', artist: '', video: false, size: 0, mtimeMs: 0 };
+  const out = { title: '', artist: '', director: '', video: false, size: 0, mtimeMs: 0 };
   let fd;
   try {
     fd = await fsp.open(filePath, 'r');
@@ -157,7 +201,7 @@ async function readTags(filePath) {
         if (fsz <= 0 || i + 10 + fsz > head.length) break;
         if (id === 'TIT2' || id === 'TPE1' || id === 'TT2' || id === 'TP1') {
           const val = decodeFrame(head.subarray(i + 10, i + 10 + fsz));
-          if (id[1] === 'I' || id === 'TT2') out.title = out.title || val; else out.artist = out.artist || val;
+          if (id[1] === 'I' || id === 'TT2') out.title = out.title || cleanTag(val); else out.artist = out.artist || cleanTag(val);
         }
         i += 10 + fsz;
       }
@@ -168,8 +212,8 @@ async function readTags(filePath) {
       if (mp4HasVideoTrack(head)) out.video = true;
       // Tags in the head already? (moov-at-front files.)
       const t = parseMp4Tags(head);
-      out.title = out.title || t.title; out.artist = out.artist || t.artist;
-      if (!out.title || !out.artist || !out.video) {
+      out.title = out.title || t.title; out.artist = out.artist || t.artist; out.director = out.director || t.director;
+      if (!out.title || !out.artist || !out.director || !out.video) {
         // Jump straight to moov (metadata) wherever it is — one targeted read of just that region.
         const moov = await findMoov(fd, size);
         if (moov) {
@@ -177,7 +221,7 @@ async function readTags(filePath) {
           const buf = await readAt(fd, moov.offset, cap, size);
           if (!out.video && mp4HasVideoTrack(buf)) out.video = true;
           const mt = parseMp4Tags(buf);
-          out.title = out.title || mt.title; out.artist = out.artist || mt.artist;
+          out.title = out.title || mt.title; out.artist = out.artist || mt.artist; out.director = out.director || mt.director;
         }
       }
     }
@@ -186,7 +230,7 @@ async function readTags(filePath) {
       const tail = await readAt(fd, Math.max(0, size - 128), 128, size);
       if (tail.length >= 128 && tail[0] === 0x54 && tail[1] === 0x41 && tail[2] === 0x47) {
         const rd = (s, e) => { let str = ''; for (let k = s; k < e; k++) { if (tail[k] === 0) break; str += String.fromCharCode(tail[k]); } return str.trim(); };
-        out.title = out.title || rd(3, 33); out.artist = out.artist || rd(33, 63);
+        out.title = out.title || cleanTag(rd(3, 33)); out.artist = out.artist || cleanTag(rd(33, 63));
       }
     }
   } catch (_) {}
@@ -208,7 +252,7 @@ ipcMain.handle('pick-folder', async () => {
 let SCAN = null;
 
 // Scan a folder. `prev` is a map of path -> {title,artist,video,size,mtime} for incremental reuse.
-ipcMain.handle('scan-folder', async (evt, { folder, prev }) => {
+ipcMain.handle('scan-folder', async (evt, { folder, prev, forceRetag }) => {
   win.webContents.send('scan-progress', { done: 0, total: 0, reused: 0, read: 0, counting: true });
   const tEnum0 = Date.now();
   const files = await listMedia(folder);
@@ -224,7 +268,10 @@ ipcMain.handle('scan-folder', async (evt, { folder, prev }) => {
            total, enumMs, get statMs(){return statMs;}, get tagMs(){return tagMs;}, tScanStart };
   const send = () => win.webContents.send('scan-progress', { done, total, reused, read });
   send();   // show the total straight away
-  const hasPrev = prevMap && Object.keys(prevMap).length > 0;
+  // forceRetag ignores the cache so changes to HOW tags are read (watermark
+  // filtering, director support) reach an existing library — otherwise unchanged
+  // files keep their old values forever.
+  const hasPrev = !forceRetag && prevMap && Object.keys(prevMap).length > 0;
   async function handle(fp) {
     try {
       const isVidExt = /\.(m4v|mov|avi|mkv)$/i.test(fp);
@@ -235,7 +282,7 @@ ipcMain.handle('scan-folder', async (evt, { folder, prev }) => {
         statMs += Date.now() - ts;
         const p = prevMap[fp];
         if (p && p.size === st.size && p.mtime === st.mtimeMs) {
-          lib.push({ title: p.title, artist: p.artist, path: fp, video: !!p.video, size: st.size, mtime: st.mtimeMs });
+          lib.push({ title: cleanTag(p.title), artist: cleanTag(p.artist), director: cleanTag(p.director || ''), path: fp, video: !!p.video, size: st.size, mtime: st.mtimeMs });
           reused++; done++; if (done % 100 === 0) send(); return;
         }
       }
@@ -245,13 +292,14 @@ ipcMain.handle('scan-folder', async (evt, { folder, prev }) => {
       tagMs += Date.now() - tt;
       read++;
       let title = (tags.title || '').trim(), artist = (tags.artist || '').trim();
+      const director = (tags.director || '').trim();
       if (!title) {
         const base = path.basename(fp).replace(/\.[^.]+$/, '');
         const parts = base.split(' - ');
         if (parts.length >= 2) { artist = artist || parts[0].trim(); title = parts.slice(1).join(' - ').trim(); }
         else title = base.trim();
       }
-      lib.push({ title, artist, path: fp, video: !!tags.video || isVidExt, size: tags.size, mtime: tags.mtimeMs });
+      lib.push({ title, artist, director, path: fp, video: !!tags.video || isVidExt, size: tags.size, mtime: tags.mtimeMs });
       done++; if (done % 100 === 0) send();
     } catch (_) { done++; }
   }
@@ -406,6 +454,9 @@ ipcMain.handle('save-library', async (evt, { name, lib }) => {
     const tracks = lib.map(t => {
       const o = { t: t.title, a: t.artist, p: t.path };
       if (t.video) o.v = 1;
+      // 'd' = director. Prep shows this instead of the artist for music videos,
+      // so it has to survive the upload or videos lose their director entirely.
+      if (t.director) o.d = t.director;
       if (Number.isFinite(t.size)) o.s = t.size;
       if (Number.isFinite(t.mtime)) o.m = t.mtime;
       return o;
